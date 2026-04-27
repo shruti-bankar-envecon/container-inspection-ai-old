@@ -1,0 +1,303 @@
+# configs/config.yaml
+
+# Model paths and confidence thresholds
+models:
+  master_detector: "models/yolov8_master_detector.pt"
+  damage_detector: "models/yolov8_damage_detector.pt"
+  master_class_names:
+    0: container_id
+    1: data_plate
+  damage_class_names:
+    0: dent
+    1: crack
+    2: rust
+    3: hole
+  detection_confidence_threshold: 0.25
+  high_confidence_threshold: 0.65 # Threshold for flagging for manual review (lowered for better detection)
+
+# LLM Validator (GPT-4 Enhanced - GPT-5 when available)
+llm:
+  model: "gpt-4o"
+  temperature: 0.1
+  # Estimated pricing for vision input per megapixel (USD). Adjust to your provider's actual pricing.
+  price_per_megapixel_usd: 0.004
+  prompt_template: |
+    You are an expert maritime logistics AI with advanced container inspection capabilities. Your task is to analyze OCR data from shipping container images with maximum accuracy.
+
+    CRITICAL REQUIREMENTS:
+    1. Container Number Validation:
+       - Must follow ISO 6346 standard: 4 letters + 6 digits + 1 check digit
+       - Validate the check digit using the ISO 6346 algorithm
+       - If multiple numbers exist, identify the valid container number
+       - Return "N/A" if no valid container number is found
+
+    2. Weight and Capacity Extraction:
+       - Extract Gross Weight (GW), Tare Weight (TARE), Net Weight (NET)
+       - Extract Volume capacity if present
+       - Extract Maximum Gross Weight (MGW) if available
+       - All weights should be in metric tons or kilograms
+
+    3. Additional Data Points (CRITICAL - Extract ALL):
+       - Container type (20ft, 40ft, 45ft, High Cube, Reefer, etc.)
+       - Owner/Leasing company code (first 3 letters of container number indicate owner)
+       - Equipment category identifier (4th letter: U=freight container, J=detachable equipment, Z=trailer/chassis)
+       - Certification details (CSC plate info, manufacture date, test date)
+       - Any safety or inspection markings
+       - Container size and type code (e.g., 22G1, 42G1)
+
+    Return ONLY a clean JSON object with this exact structure:
+    {{
+      "container_number": "string or N/A",
+      "container_type": "string or N/A", 
+      "gross_weight": "number or null",
+      "tare_weight": "number or null",
+       - Extract Maximum Gross Weight (MGW) if available
+       - All weights should be in metric tons or kilograms
+       - Container type (20ft, 40ft, 45ft, etc.)
+       - Owner/Leasing company if visible
+       - Certification details (CSC plate info)
+       - Any safety or inspection markings
+
+    Return ONLY a clean JSON object with this exact structure:
+    {{
+      "container_number": "string or N/A",
+      "container_type": "string or N/A", 
+      "gross_weight": "number or null",
+      "tare_weight": "number or null",
+      "net_weight": "number or null",
+      "volume": "number or null",
+      "max_gross_weight": "number or null",
+      "owner": "string or N/A",
+      "certification_valid": "boolean or null",
+      "confidence_score": "number between 0-1"
+    }}
+
+    RAW OCR TEXT:
+    ---
+    {raw_text}
+    ---
+
+# GPT-4 Vision Analysis for Damage Detection (GPT-5 when available)
+vision_analysis:
+  model: "gpt-4o"  # Using gpt-4o which has vision capabilities
+  temperature: 0.0  # Zero temperature for consistent, deterministic results
+  # LLM-only downsampling controls
+  downsampling:
+    enable: true
+    # method options: area | bilinear | bicubic | lanczos
+    method: area
+    # Max dimension for LLM-only image downsampling to reduce cost (keeps original for YOLO/CV)
+    max_image_dim: 1280
+  damage_detection_prompt: |
+    You are an expert maritime container damage assessment AI with 20+ years of field experience. Analyze this container image with EXTREME PRECISION to identify ALL visible damage, wear, and structural issues.
+
+    CONTAINER LOCATION CODE SYSTEM (CRITICAL - USE THIS FORMAT):
+    Location codes follow this format: [Position][Component][Number][Suffix]
+    
+    Position (First Letter):
+    - L = Left side, R = Right side, T = Top/Roof, D = Door
+    - B = Bottom/Floor, U = Underneath, F = Front, M = Machinery
+    - I = Inside, E = End/Rear
+    
+    Component (Second Letter):
+    - T = Top rail, B = Bottom rail, N = Panel, H = Hinge
+    - X = Cross member, R = Rail, L = Locking/Floor, G = Gasket
+    - C = Corner post, F = Frame
+    
+    Numbers (01-99): Panel/section position from front to rear
+    Suffix: N = Near/specific location, W = Wide/full width
+    
+    Example codes: IR78 (Inside Rail 78), B25N (Bottom 25 Near), DB03 (Door Bottom 03),
+    DT9N (Door Top 9 Near), RH46 (Right Hinge 46), TR12 (Top Rail 12), LN29 (Left Panel 29)
+
+    CRITICAL INSTRUCTIONS - ACCURACY AND PRECISION:
+    
+    1. Damage Detection (BE PRECISE AND ACCURATE):
+       - Identify ONLY ACTUAL visible damage: dents, cracks, rust, holes, bent frames, corrosion, paint damage, deformation
+       - Pay special attention to: doors (bent, damaged, misaligned), corner posts, side panels, roof, floor
+       - Report damage accurately - balance between over-reporting and under-reporting
+       - Assess damage severity realistically: minor (cosmetic), major (structural concern), critical (unsafe)
+       - Determine damage zones precisely using the location code system above
+       - Estimate approximate damage dimensions accurately (measure in cm/inches)
+       - CRITICAL: Provide TIGHT bounding boxes ONLY for actual damage areas
+       - Each damage = one small box, NOT large boxes covering entire panels
+       - If you see 3 separate rust spots, draw 3 small boxes, NOT 1 large box
+
+    2. Structural Assessment (BE CRITICAL):
+       - Evaluate container structural integrity thoroughly
+       - Check for warping, misalignment, or deformation (especially doors and frames)
+       - Assess door functionality and seal integrity
+       - Identify any safety hazards or compliance issues
+       - Look for signs of previous repairs or patches
+
+    3. Container Condition (BE REALISTIC):
+       - Overall condition grade: Excellent (no damage), Good (minor wear), Fair (noticeable damage), Poor (significant damage), Critical (unsafe/non-functional)
+       - For this image, if you see obvious damage like bent doors or structural issues, grade as Poor or Critical
+       - Estimate remaining service life realistically
+       - Identify maintenance priorities
+       - Flag items requiring immediate attention
+
+    4. Confidence Scoring (BE HONEST):
+       - Set confidence_score to 0.9+ if you can clearly see the container and any damage
+       - Only use low confidence (<0.7) if the image is blurry, dark, or obstructed
+       - Your confidence should reflect image quality, not damage severity
+
+    IMPORTANT: If you see ANY visible damage (bent doors, dents, rust, holes, deformation), you MUST report it with appropriate severity. Do not underestimate damage severity.
+
+    Return ONLY a JSON object with this structure:
+    {{
+      "damages": [
+        {{
+          "type": "bent_frame|dent|crack|rust|hole|corrosion|deformation|paint_damage",
+          "severity": "minor|major|critical",
+          "zone": "door|side_panel|roof|floor|corner_post|rail|hinge|frame|left|right|top|bottom|front|rear",
+          "location_code": "Use format: [Position][Component][Number][Suffix] e.g., LN45, DR23, TB12, RH46",
+          "bbox": [x, y, width, height],
+          "dimensions": "string describing size/extent",
+          "confidence": 0.8-1.0,
+          "description": "detailed description of the specific damage observed",
+          "repair_priority": "low|medium|high|urgent"
+        }}
+      ],
+      "container_details": {{
+        "container_number": "extracted container ID (e.g., CPIU1811772)",
+        "container_number_bbox": [x, y, width, height] or null,
+        "container_type": "20ft|40ft|45ft|High Cube|Reefer|etc.",
+        "owner_code": "first 3 letters of container number",
+        "equipment_category": "U=freight|J=detachable|Z=trailer",
+        "size_type_code": "ISO size/type code (e.g., 22G1, 42G1)",
+        "location_codes": [
+          {{
+            "code": "location/identification code",
+            "type": "container_id|data_plate|text|marking",
+            "bbox": [x, y, width, height],
+            "text_content": "full extracted text"
+          }}
+        ],
+        "data_plate_info": {{
+          "max_gross": "weight value",
+          "tare": "weight value",
+          "manufacture_date": "date if visible",
+          "test_date": "CSC test date if visible",
+          "other_specs": "additional specifications",
+          "bbox": [x, y, width, height] or null
+        }}
+      }},
+      "overall_condition": "Excellent|Good|Fair|Poor|Critical",
+      "structural_integrity": "Intact|Compromised|Severely_Damaged|Unsafe",
+      "safety_concerns": ["specific safety issues observed"],
+      "maintenance_recommendations": ["specific actionable recommendations"],
+      "estimated_repair_cost": 0,
+      "confidence_score": 0.85-0.99
+    }}
+
+    CRITICAL BOUNDING BOX INSTRUCTIONS (EXTREMELY IMPORTANT - READ CAREFULLY):
+    - Bounding boxes MUST use format: [x, y, width, height] in pixels
+    - x, y = top-left corner coordinates
+    - width, height = box dimensions
+    - IMPORTANT: Analyze the ACTUAL image dimensions carefully
+    
+    DAMAGE BOUNDING BOX RULES (MANDATORY - VIOLATIONS WILL BE REJECTED):
+    1. MAX SIZE LIMIT: Each damage bbox MUST NOT exceed 15% of total image area
+       - For 1280x720 image (921,600 px), max bbox area = 138,240 px (~370x370 max)
+       - For 640x480 image (307,200 px), max bbox area = 46,080 px (~215x215 max)
+    2. TIGHT FIT: Box should be only 10-20% larger than the actual visible damage
+    3. ONE DAMAGE = ONE SMALL BOX: Never draw one large box for multiple damages
+    4. SPECIFIC EXAMPLES:
+       * Small dent (5cm) → bbox ~60x80 pixels, NOT 300x400
+       * Rust patch (10cm) → bbox ~100x120 pixels, NOT entire panel
+       * Bent corner → bbox ~80x150 pixels around the bent area only
+       * Door deformation → bbox around the SPECIFIC deformed area, NOT the entire door
+    5. WRONG vs RIGHT:
+       * WRONG: [50, 100, 400, 500] covering entire door
+       * RIGHT: [180, 280, 80, 100] around specific damage spot
+       * WRONG: One box for "multiple rust spots on left panel"
+       * RIGHT: 3 separate small boxes for 3 rust spots
+    
+    - For location codes and text:
+      * Container number text: Draw box tightly around the text characters only
+      * Data plate: Draw box around the plate area with specifications
+    - Bounding boxes should be MINIMAL and PRECISE
+    - OVERSIZED BOXES WILL BE AUTOMATICALLY REMOVED BY THE SYSTEM
+
+  enhanced_analysis_prompt: |
+    You are a maritime engineering expert with 20+ years of container inspection experience. Provide a comprehensive damage assessment with professional-grade accuracy.
+
+    DETAILED ANALYSIS REQUIRED:
+    1. Damage Classification:
+       - Categorize each damage by type, severity, and impact
+       - Provide accurate bounding boxes [x, y, width, height] for each damage
+       - Assess potential for damage propagation
+       - Evaluate impact on container functionality
+       - Consider weather resistance implications
+
+    2. Cost Estimation:
+       - Provide detailed repair cost estimates
+       - Include material, labor, and downtime costs
+       - Factor in regional pricing variations
+       - Consider repair vs. replacement decisions
+
+    3. Safety and Compliance:
+       - Identify any safety hazards
+       - Check compliance with international standards
+       - Assess impact on cargo security
+       - Evaluate insurance implications
+
+    4. Recommendations:
+       - Immediate actions required
+       - Long-term maintenance planning
+       - Preventive measures
+       - Documentation requirements
+
+    Return a comprehensive JSON report with this structure:
+    {{
+      "enhanced_damages": [
+        {{
+          "type": "damage_type",
+          "severity": "minor|major|critical",
+          "zone": "location",
+          "bbox": [x, y, width, height],
+          "confidence": 0.0-1.0,
+          "description": "detailed description",
+          "repair_priority": "low|medium|high|urgent",
+          "estimated_cost": number,
+          "repair_method": "description of repair approach"
+        }}
+      ],
+      "repair_recommendations": ["detailed recommendations"],
+      "cost_breakdown": {{
+        "damage_type": {{"labor": number, "materials": number, "total": number}}
+      }},
+      "safety_assessment": "assessment text",
+      "compliance_status": "compliant|non-compliant|needs_inspection"
+    }}
+
+# Condition Grading and Severity
+grading:
+  severity_map:
+    # Confidence threshold maps to severity
+    minor: 0.6
+    major: 0.8
+    critical: 1.0
+  condition_map:
+    # The worst damage type determines the overall condition
+    critical: "Critical Repair"
+    major: "Major Repair"
+    minor: "Minor Repair"
+
+# Repair Cost Estimation (INR) - Realistic market rates
+repair_costs_inr:
+  dent: { minor: 2500, major: 8000, critical: 15000 }
+  crack: { minor: 5000, major: 15000, critical: 30000 }
+  rust: { minor: 3000, major: 10000, critical: 20000 }
+  hole: { minor: 8000, major: 25000, critical: 50000 }
+  bent_frame: { minor: 10000, major: 35000, critical: 80000 }
+  corrosion: { minor: 4000, major: 12000, critical: 25000 }
+  deformation: { minor: 7000, major: 28000, critical: 65000 }
+  paint_damage: { minor: 1500, major: 5000, critical: 10000 }
+  door: { minor: 12000, major: 40000, critical: 100000 }
+  unknown: { minor: 3000, major: 10000, critical: 20000 }
+
+# Currency conversion rate
+currency:
+  usd_to_inr: 83.0

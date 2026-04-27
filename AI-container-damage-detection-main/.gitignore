@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Environment & secrets
+.env
+.env.*
+*.env
+
+# Data outputs and artifacts
+data/outputs/
+*.xlsx
+*.pdf
+
+# Models
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# Streamlit & cache
+.streamlit/
+**/.streamlit/
+**/.cache/
+.cache/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
